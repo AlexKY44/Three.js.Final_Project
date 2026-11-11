@@ -13,14 +13,16 @@ import { CarBuilder } from './world/CarBuilder.js';
 
 import { PostProcessing } from './core/PostProcessing.js';
 import { CameraCollision } from './core/CameraCollision.js';
+import { SkyDome, SKY_COLORS } from './shaders/SkyShader.js';
 
 const canvas = document.querySelector('#webgl-canvas');
 const scene = new THREE.Scene();
 
-// 1. НЕБО ТА ТУМАН
-const skyColor = 0x7ec0ee;
-scene.background = new THREE.Color(skyColor);
-scene.fog = new THREE.FogExp2(skyColor, 0.0035);
+// 1. НЕБО (власний шейдер) ТА ТУМАН
+// Колір фону і туману = колір горизонту, щоб краї карти плавно розчинялися в небі
+scene.background = SKY_COLORS.horizon.clone();
+scene.fog = new THREE.FogExp2(SKY_COLORS.horizon.clone(), 0.0035);
+const skyDome = new SkyDome(scene);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 50, 75);
@@ -30,6 +32,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Tone mapping застосовує OutputPass у composer. Якщо картинка темна, збільште exposure
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -45,6 +50,7 @@ controls.target.set(0, 0, 0);
 // 2. ОСВІТЛЕННЯ ТА СОНЦЕ
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
+// Позиція має збігатися з SUN_DIRECTION у shaders/SkyShader.js (100, 80, -50)
 const dirLight = new THREE.DirectionalLight(0xffffff, 1.3);
 dirLight.position.set(100, 80, -50);
 dirLight.castShadow = true;
@@ -56,6 +62,8 @@ dirLight.shadow.camera.left = -90;
 dirLight.shadow.camera.right = 90;
 dirLight.shadow.camera.top = 90;
 dirLight.shadow.camera.bottom = -90;
+dirLight.shadow.bias = -0.0005;
+dirLight.shadow.normalBias = 0.02;
 scene.add(dirLight);
 
 // Сонце. Колір > 1.0 (HDR) потрібен, щоб воно пройшло поріг Bloom.
@@ -86,7 +94,7 @@ const farmBuilder = new FarmBuilder(scene);
 const lakeBuilder = new LakeBuilder(scene);
 const windTurbineBuilder = new WindTurbineBuilder(scene);
 const cloudBuilder = new CloudBuilder(scene);
-const carBuilder = new CarBuilder(scene); // <-- цього рядка бракувало
+const carBuilder = new CarBuilder(scene);
 
 // 4. КОЛІЗІЇ ТА POST-PROCESSING
 const cameraCollision = new CameraCollision(camera, controls, {
@@ -101,7 +109,6 @@ const postProcessing = new PostProcessing(renderer, scene, camera, {
   threshold: 1.0
 });
 
-// Чекаємо, поки завантажаться всі моделі, і лише тоді збираємо колізії
 Promise.all([
   cityBuilder.buildStreet(),
   villageBuilder.buildVillage(),
@@ -113,7 +120,7 @@ Promise.all([
   cloudBuilder.buildClouds(),
   carBuilder.buildCars()
 ]).then(() => {
-  cameraCollision.collect(scene, { exclude: [plane, sunMesh] });
+  cameraCollision.collect(scene, { exclude: [plane, sunMesh, skyDome.mesh] });
 }).catch((err) => {
   console.error('Помилка будівництва світу:', err);
 });
@@ -123,8 +130,9 @@ function animate() {
   requestAnimationFrame(animate);
 
   controls.update();
-  cameraCollision.update(); // строго після controls.update()
+  cameraCollision.update();
 
+  skyDome.update();
   lakeBuilder.update();
   farmBuilder.update();
   windTurbineBuilder.update();
